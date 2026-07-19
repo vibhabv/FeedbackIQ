@@ -1073,7 +1073,7 @@ async function finalizePending(){
 
   if(!skipTextClassify && doClassify && withText.length){
     document.getElementById('progWrap').style.display='block';
-    const BATCH=12; let done=0;
+    const BATCH=5; let done=0;
     for(let i=0;i<withText.length;i+=BATCH){
       const batch = withText.slice(i,i+BATCH);
       try{
