@@ -847,7 +847,7 @@ function coerceRecord(row, idx, cfg){
   return {
     feedback_id:`up_${Date.now()}_${idx}`, source_channel: get('source_channel', cfg.channel),
     customer_id: get('customer_id',null), branch: get('branch','Unspecified'), service_location: get('service_location',null),
-    staff_id: get('staff_id',null), product_service_type: get('product_service_type',null), timestamp: tsIso,
+    staff_id: get('staff_id',null), product_service_type: get('product_service_type','Unspecified'), timestamp: tsIso,
     raw_text: (String(get('raw_text','')||'')).trim() || null,
     ratings: hasRatings ? {overall:overall??3, service:service??3, technician:technician??3, explanation:explanation??3} : null,
     nps: num(get('nps',null)), star_rating: num(get('star_rating',null)),
@@ -907,7 +907,7 @@ async function finalizePending(){
   if(ingestMode === 'paste'){
     records = pasteLineStates.filter(l=>l.include).map((l,i) => ({
       feedback_id:`up_${Date.now()}_${i}`, source_channel: cfg.channel, customer_id:null, branch:'Unspecified',
-      service_location:null, staff_id:null, product_service_type:null, timestamp:new Date().toISOString(),
+      service_location:null, staff_id:null, product_service_type:'Unspecified', timestamp:new Date().toISOString(),
       raw_text: l.text, ratings:null, nps:null, star_rating:null,
       sentiment:null, sentiment_score:null, topic_tags:[], urgency_flag:false, status:'new',
     }));
