@@ -113,6 +113,9 @@
   .ibtn.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
   .ibtn.danger{color:var(--neg);}
   #fileInput{display:none;}
+  #imageInput{display:none;}
+  .image-thumb-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+  .image-thumb{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--border);}
   .ingest-advanced{display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);}
   .map-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:8px;}
   .map-row label{display:block;font-size:10.5px;color:var(--ink-soft);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.03em;}
@@ -149,6 +152,8 @@
       <button class="ibtn primary" id="chooseFileBtn" type="button">Upload CSV / JSON</button>
       <input type="file" id="fileInput" accept=".csv,.json,application/json,text/csv">
       <button class="ibtn" id="pasteToggleBtn" type="button">Paste text</button>
+      <button class="ibtn" id="chooseImageBtn" type="button">Upload screenshot(s)</button>
+      <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
       <button class="ibtn" id="loadDummyBtn" type="button">Load 500 dummy records</button>
       <span style="flex:1;"></span>
       <button class="ibtn" id="refreshBtn" type="button">Refresh</button>
@@ -272,9 +277,13 @@ function attachSort(tabKey, panelId, rerenderFn){
   });
 }
 function feedItemHtml(r){
-  return `<div class="feed-item"><div class="feed-top"><span>${esc(r.source_channel)} · ${esc(r.branch)}${r.staff_id?` · ${esc(r.staff_id)}`:''} · ${new Date(r.timestamp).toLocaleDateString()}</span><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></div>
+  const dateStr = new Date(r.timestamp).toLocaleDateString() + (r.date_inferred ? ' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>' : '');
+  const custStr = r.customer_id ? ` · ${esc(r.customer_id)}${r.customer_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>':''}` : '';
+  const staffStr = r.staff_id ? ` · ${esc(r.staff_id)}${r.staff_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>':''}` : '';
+  return `<div class="feed-item"><div class="feed-top"><span>${esc(r.source_channel)} · ${esc(r.branch)}${r.branch_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-guessed</span>':''}${staffStr}${custStr} · ${dateStr}</span><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></div>
     <p class="feed-text">${r.raw_text ? esc(r.raw_text) : '<em>(rating-only, no written comment)</em>'}</p>
-    <div>${(r.topic_tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>`;
+    <div>${(r.topic_tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+    ${r.opportunity_note ? `<div style="margin-top:6px;padding:7px 10px;background:var(--gold-soft);border-radius:8px;font-size:11.5px;color:var(--ink);"><strong>💡 Opportunity:</strong> ${esc(r.opportunity_note)}</div>` : ''}</div>`;
 }
 function openDrilldown(title, records){
   document.getElementById('modalTitle').textContent = title;
@@ -478,18 +487,19 @@ function renderServiceType(){
     const negShare = list.length? Math.round(negList.length/list.length*100):0;
     const negTopics = topicCounts(list,'negative');
     const topNeg = Object.entries(negTopics).sort((a,b)=>b[1]-a[1])[0];
-    return {t, vol:list.length, negShare, topNeg: topNeg? topNeg[0]:'—', list};
+    const inferredCount = list.filter(r=>r.service_type_inferred).length;
+    return {t, vol:list.length, negShare, topNeg: topNeg? topNeg[0]:'—', list, inferredCount};
   });
   const rows = sortRows(allRows, sortState.svc.key, sortState.svc.dir);
 
   document.getElementById('panel-servicetype').innerHTML = `
-    <div class="card"><h2>Service type breakdown</h2><p class="sub">Which service types drive the most negative feedback? Click a header to sort, a row for records.</p>
+    <div class="card"><h2>Service type breakdown</h2><p class="sub">Which service types drive the most negative feedback? Click a header to sort, a row for records. "AI-guessed" marks service types Claude inferred from context, not provided in the source data.</p>
     <table><thead><tr>${thSort('svc','t','Service type')}${thSort('svc','vol','Volume')}${thSort('svc','negShare','Negative share')}${thSort('svc','topNeg','Top negative topic')}</tr></thead>
     <tbody id="svcRows"></tbody></table></div>
   `;
   attachSort('svc', 'panel-servicetype', renderServiceType);
   const tbody = document.getElementById('svcRows');
-  tbody.innerHTML = rows.map(r=>`<tr class="clickable"><td>${esc(r.t)}</td><td>${r.vol}</td><td><span class="badge ${r.negShare>=40?'bad':r.negShare>=20?'warn':'good'}">${r.negShare}%</span></td><td>${esc(r.topNeg)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Not enough data.</td></tr>';
+  tbody.innerHTML = rows.map(r=>`<tr class="clickable"><td>${esc(r.t)}${r.inferredCount?` <span class="badge warn" style="margin-left:4px;">${r.inferredCount} AI-guessed</span>`:''}</td><td>${r.vol}</td><td><span class="badge ${r.negShare>=40?'bad':r.negShare>=20?'warn':'good'}">${r.negShare}%</span></td><td>${esc(r.topNeg)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Not enough data.</td></tr>';
   tbody.querySelectorAll('tr').forEach((tr,i)=>{ if(!rows[i]) return; tr.addEventListener('click', ()=>openDrilldown(rows[i].t, rows[i].list)); });
 }
 
@@ -702,6 +712,8 @@ document.getElementById('clearStoreBtn').addEventListener('click', async ()=>{
 
 // ============ INGESTION ============
 const TOPIC_TAXONOMY = ["Treatment effectiveness","Technician knowledge & professionalism","Response time & scheduling","Compliance & documentation","Communication & follow-up","Pricing & billing","Recurring visit consistency","Safety/eco-friendly practice perception"];
+const SERVICE_TYPE_TAXONOMY = ["Initial inspection","Recurring scheduled service","Quarterly service","Emergency/callback visit","Rodent exclusion & trapping","Termite/WDO inspection & report","IPM consultation","Compliance documentation service"];
+const BRANCH_TAXONOMY = ["SF","Antioch","San Jose"];
 const TYPE_CONFIG = {
   survey:  {channel:'Post-service survey', hint:'Survey form: map Overall/Service/Technician/Explanation ratings, NPS, and technician name. Comments are often blank — that\'s fine.', guessOrder:['overall_rating','service_rating','technician_rating','explanation_rating','nps','staff_id','branch','service_location','customer_id','timestamp','raw_text'],
     csvExample: 'Overall Rating,Service Rating,Technician Rating,Explanation Rating,NPS,Technician,Branch,Service Location,Client,Date,Comment\n5,5,4,5,9,Sergio Verduzco,San Jose,Tech Campus,Client Account 014,2026-07-14,"Really appreciated how thorough he was."'},
@@ -734,6 +746,7 @@ const GUESS_CANDIDATES = {
 };
 
 let parsedRows = [], headers = [], mapping = {};
+let selectedImageFiles = [];
 let ingestMode = 'file';
 let pasteLineStates = [];
 
@@ -758,6 +771,106 @@ document.getElementById('pasteToggleBtn').addEventListener('click', ()=>{
   const box = document.getElementById('pasteBox'), ctrl = document.getElementById('pasteControls');
   const show = box.style.display==='none'; box.style.display = show?'block':'none'; ctrl.style.display = show?'flex':'none';
 });
+
+document.getElementById('chooseImageBtn').addEventListener('click', ()=>document.getElementById('imageInput').click());
+document.getElementById('imageInput').addEventListener('change', (e)=>{
+  selectedImageFiles = Array.from(e.target.files || []);
+  if(!selectedImageFiles.length) return;
+  ingestMode = 'image';
+  document.getElementById('mapGrid').innerHTML = `
+    <div style="grid-column:1/-1;">
+      <div class="ingest-hint">${selectedImageFiles.length} screenshot(s) selected. Claude will read each one and extract the review text, ratings, date, names, and location automatically.</div>
+      <div class="image-thumb-row" id="imageThumbRow"></div>
+    </div>`;
+  const thumbRow = document.getElementById('imageThumbRow');
+  selectedImageFiles.forEach(f=>{
+    const img = document.createElement('img');
+    img.className = 'image-thumb';
+    img.src = URL.createObjectURL(f);
+    thumbRow.appendChild(img);
+  });
+  document.getElementById('ingestAdvanced').style.display = 'block';
+  document.getElementById('previewSub').textContent = `${selectedImageFiles.length} image(s) ready. Click Import data to extract and save.`;
+});
+
+function fileToBase64(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function extractImageBatch(files){
+  const imageBlocks = [];
+  for(let i=0;i<files.length;i++){
+    const base64 = await fileToBase64(files[i]);
+    imageBlocks.push({type:'text', text:`Image ${i}:`});
+    imageBlocks.push({type:'image', source:{type:'base64', media_type: files[i].type || 'image/png', data: base64}});
+  }
+  const instructions = `You are extracting structured customer feedback data from the ${files.length} screenshot(s) above, for a commercial pest management company (branches: SF, Antioch, San Jose). Each image is either a review site screenshot (Yelp/Google -- star rating, review text, reviewer name, date, sometimes location) or a post-service survey results screen (multiple star ratings for Overall/Service/Technician/Explanation, an NPS score 0-10, technician name, optionally a written comment).
+
+For EACH image, extract everything actually visible and return one JSON object with these fields:
+- image_index (0-based, matching the image labels above)
+- raw_text (the actual written review/comment text visible, or "" if none is shown)
+- overall_rating, service_rating, technician_rating, explanation_rating (integers 1-5, ONLY if that exact multi-dimension survey UI is visible, else null)
+- nps (integer 0-10, ONLY if an NPS score is visible, else null)
+- star_rating (integer 1-5, ONLY if a single star rating like Yelp/Google is shown, else null)
+- extracted_date (format "YYYY-MM-DD", ONLY if a date is visible, else null)
+- extracted_customer_name (the reviewer/customer's name if visible, else null)
+- extracted_technician_name (a technician's name if named as performing the service, else null)
+- predicted_branch (one exact string from ${JSON.stringify(BRANCH_TAXONOMY)}, ONLY if a location clearly maps to one, else null)
+- predicted_service_type (one exact string from ${JSON.stringify(SERVICE_TYPE_TAXONOMY)}, ONLY if there's a real clue, else null)
+- sentiment ("positive"|"neutral"|"negative")
+- sentiment_score (-1 to 1)
+- topic_tags (array from ${JSON.stringify(TOPIC_TAXONOMY)}, 1-2 most relevant, empty array if no written text)
+- urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint)
+- opportunity_note (one short sentence max ~20 words: upsell/cross-sell/referral/review-request angle for positive, retention/resolution step for negative; null if nothing to ground it in)
+
+Return ONLY a raw JSON array, no markdown fences, ordered by image_index.`;
+  imageBlocks.push({type:'text', text: instructions});
+
+  let response;
+  try{
+    response = await fetch(CLAUDE_API_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1000, messages:[{role:"user", content: imageBlocks}]})});
+  }catch(networkErr){
+    throw new Error("Couldn't reach the Claude API for image extraction — same requirement as text: needs to run inside a Claude artifact or through your own backend proxy.");
+  }
+  const data = await response.json();
+  if(data.error){ throw new Error("API error: " + (data.error.message || data.error.type)); }
+  const textBlock = (data.content||[]).find(b=>b.type==='text');
+  if(!textBlock) throw new Error("No text content in image extraction response.");
+  let clean = textBlock.text.trim().replace(/^```json/,'').replace(/^```/,'').replace(/```$/,'').trim();
+  return JSON.parse(clean);
+}
+
+function buildRecordFromImageExtraction(obj, cfg, idx){
+  const hasRatings = [obj.overall_rating,obj.service_rating,obj.technician_rating,obj.explanation_rating].some(v=>v!=null);
+  let tsIso = new Date().toISOString(), dateInferred = false;
+  if(obj.extracted_date && /^\d{4}-\d{2}-\d{2}$/.test(obj.extracted_date)){
+    const d = new Date(obj.extracted_date+'T00:00:00');
+    if(!isNaN(d)){ tsIso = d.toISOString(); dateInferred = true; }
+  }
+  const branchOk = obj.predicted_branch && BRANCH_TAXONOMY.includes(obj.predicted_branch);
+  const svcOk = obj.predicted_service_type && SERVICE_TYPE_TAXONOMY.includes(obj.predicted_service_type);
+  return {
+    feedback_id:`img_${Date.now()}_${idx}`, source_channel: cfg.channel,
+    customer_id: obj.extracted_customer_name || null, branch: branchOk ? obj.predicted_branch : 'Unspecified',
+    service_location: null, staff_id: obj.extracted_technician_name || null,
+    product_service_type: svcOk ? obj.predicted_service_type : 'Unspecified', timestamp: tsIso,
+    raw_text: obj.raw_text ? String(obj.raw_text).trim() || null : null,
+    ratings: hasRatings ? {overall:obj.overall_rating??3, service:obj.service_rating??3, technician:obj.technician_rating??3, explanation:obj.explanation_rating??3} : null,
+    nps: (typeof obj.nps==='number') ? obj.nps : null, star_rating: (typeof obj.star_rating==='number') ? obj.star_rating : null,
+    sentiment: obj.sentiment || null, sentiment_score: (typeof obj.sentiment_score==='number') ? obj.sentiment_score : null,
+    topic_tags: obj.topic_tags||[], urgency_flag: !!obj.urgency_flag, status:'new',
+    opportunity_note: obj.opportunity_note || null,
+    date_inferred: dateInferred, customer_inferred: !!obj.extracted_customer_name, staff_inferred: !!obj.extracted_technician_name,
+    branch_inferred: branchOk, service_type_inferred: svcOk,
+  };
+}
+
 function looksLikeRealComment(text){
   const flat = text.replace(/\s*\n\s*/g, ' ').trim();
   const wordCount = flat.split(/\s+/).length;
@@ -840,18 +953,20 @@ function buildMapping(){
 function num(v){ if(v===undefined||v===null||v==='') return null; const n=parseFloat(v); return isNaN(n)?null:n; }
 function coerceRecord(row, idx, cfg){
   const get=(key,dflt)=>{ const col=mapping[key]; if(!col||col==='__none__') return dflt; const v=row[col]; return (v===undefined||v===null||v==='')?dflt:v; };
-  let ts=get('timestamp',null); let tsIso;
-  if(ts){ const d=new Date(ts); tsIso = isNaN(d)?new Date().toISOString():d.toISOString(); } else tsIso=new Date().toISOString();
+  let ts=get('timestamp',null); let tsIso; let tsWasDefault=false;
+  if(ts){ const d=new Date(ts); tsIso = isNaN(d)?new Date().toISOString():d.toISOString(); } else { tsIso=new Date().toISOString(); tsWasDefault=true; }
   const overall=num(get('overall_rating',null)), service=num(get('service_rating',null)), technician=num(get('technician_rating',null)), explanation=num(get('explanation_rating',null));
   const hasRatings = [overall,service,technician,explanation].some(v=>v!==null);
+  const custVal = get('customer_id',null), staffVal = get('staff_id',null);
   return {
     feedback_id:`up_${Date.now()}_${idx}`, source_channel: get('source_channel', cfg.channel),
-    customer_id: get('customer_id',null), branch: get('branch','Unspecified'), service_location: get('service_location',null),
-    staff_id: get('staff_id',null), product_service_type: get('product_service_type','Unspecified'), timestamp: tsIso,
+    customer_id: custVal, branch: get('branch','Unspecified'), service_location: get('service_location',null),
+    staff_id: staffVal, product_service_type: get('product_service_type','Unspecified'), timestamp: tsIso,
     raw_text: (String(get('raw_text','')||'')).trim() || null,
     ratings: hasRatings ? {overall:overall??3, service:service??3, technician:technician??3, explanation:explanation??3} : null,
     nps: num(get('nps',null)), star_rating: num(get('star_rating',null)),
     sentiment:null, sentiment_score:null, topic_tags:[], urgency_flag:false, status:'new',
+    timestamp_is_default: tsWasDefault, customer_is_default: !custVal, staff_is_default: !staffVal,
   };
 }
 function deriveSentimentFromRatings(r){
@@ -864,11 +979,26 @@ function deriveSentimentFromRatings(r){
 const CLAUDE_API_ENDPOINT = "https://claude-proxy.vibha21u.workers.dev";
 
 async function classifyBatch(batch){
-  const prompt = `You are a customer feedback classification engine for a commercial integrated pest management company. Classify each feedback item below.
+  const prompt = `You are a customer feedback classification engine for a commercial integrated pest management company (branches: SF, Antioch, San Jose in the Bay Area). Classify each feedback item below.
 
 Topic taxonomy (choose 1-2 most relevant per item, use these exact strings): ${JSON.stringify(TOPIC_TAXONOMY)}
 
-For each item return: feedback_id, sentiment ("positive"|"neutral"|"negative"), sentiment_score (-1 to 1), topic_tags (array from the taxonomy), urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint).
+Service type taxonomy (use these exact strings): ${JSON.stringify(SERVICE_TYPE_TAXONOMY)}
+
+Branch taxonomy (use these exact strings): ${JSON.stringify(BRANCH_TAXONOMY)}
+
+For each item return:
+- feedback_id
+- sentiment ("positive"|"neutral"|"negative")
+- sentiment_score (-1 to 1)
+- topic_tags (array from the topic taxonomy)
+- urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint)
+- predicted_service_type (one exact string from the service type taxonomy ONLY if the text gives a real clue what kind of visit it was, otherwise null; do not guess without evidence)
+- predicted_branch (one exact string from the branch taxonomy ONLY if a city, neighborhood, or address in the text clearly maps to the Bay Area area served by one of these branches -- e.g. "San Francisco"/"Pacifica"/"Daly City" implies SF; "Antioch"/"Concord"/"Pittsburg"/"Brentwood" implies Antioch; "San Jose"/"Santa Clara"/"Sunnyvale"/"Milpitas" implies San Jose -- otherwise null)
+- opportunity_note (one short sentence, max ~20 words, a genuine business next-step suggestion grounded in this specific feedback. For positive feedback: suggest a natural upsell, cross-sell, referral ask, or testimonial/review request tied to what they praised. For negative feedback: suggest a retention or resolution next step. Only return null if the text is truly too generic to ground any specific suggestion in.)
+- extracted_date (a specific date mentioned in the text, format "YYYY-MM-DD", e.g. "May 5, 2026" -> "2026-05-05" -- ONLY if an actual date appears in the text, otherwise null)
+- extracted_customer_name (the reviewer/customer's own name if it appears in the text, e.g. a byline or self-identification -- otherwise null. Do NOT use a technician's name for this field.)
+- extracted_technician_name (a technician's name explicitly credited with performing the service, e.g. "Lead tech, Tuan" or "Dealt with Mari" -- otherwise null. Do NOT use the reviewer's own name for this field.)
 
 Return ONLY a raw JSON array, no markdown fences. Items:
 ${JSON.stringify(batch.map(r=>({feedback_id:r.feedback_id, raw_text:r.raw_text})))}`;
@@ -904,12 +1034,33 @@ function mergeNoDupes(existing, incoming){
 async function finalizePending(){
   const cfg = TYPE_CONFIG[document.getElementById('dataTypeSelect').value];
   let records;
-  if(ingestMode === 'paste'){
+  let classifiedOk = 0, classifiedFailed = 0, lastClassifyError = null;
+  let skipTextClassify = false;
+
+  if(ingestMode === 'image'){
+    if(!selectedImageFiles.length){ showIngestMsg('No images selected.', false); return; }
+    document.getElementById('progWrap').style.display = 'block';
+    const IMG_BATCH = 3; let done = 0; const extracted = [];
+    for(let i=0;i<selectedImageFiles.length;i+=IMG_BATCH){
+      const batch = selectedImageFiles.slice(i, i+IMG_BATCH);
+      try{
+        const results = await extractImageBatch(batch);
+        results.forEach(obj => { extracted.push(buildRecordFromImageExtraction(obj, cfg, i + (obj.image_index ?? 0))); classifiedOk++; });
+      }catch(e){ classifiedFailed += batch.length; lastClassifyError = e.message; }
+      done += batch.length;
+      document.getElementById('progressFill').style.width = Math.min(done/selectedImageFiles.length*100,100).toFixed(0)+'%';
+      document.getElementById('progressLabel').textContent = `${done} / ${selectedImageFiles.length} images`;
+    }
+    records = extracted.filter(r=>r.raw_text || r.ratings || r.star_rating!=null);
+    if(!records.length){ showIngestMsg('No usable data extracted from the image(s).'+(lastClassifyError?' Error: '+lastClassifyError:''), false); return; }
+    skipTextClassify = true;
+  } else if(ingestMode === 'paste'){
     records = pasteLineStates.filter(l=>l.include).map((l,i) => ({
       feedback_id:`up_${Date.now()}_${i}`, source_channel: cfg.channel, customer_id:null, branch:'Unspecified',
       service_location:null, staff_id:null, product_service_type:'Unspecified', timestamp:new Date().toISOString(),
       raw_text: l.text, ratings:null, nps:null, star_rating:null,
       sentiment:null, sentiment_score:null, topic_tags:[], urgency_flag:false, status:'new',
+      timestamp_is_default:true, customer_is_default:true, staff_is_default:true,
     }));
     if(!records.length){ showIngestMsg('No lines are checked — check at least one line to import.', false); return; }
   } else {
@@ -918,10 +1069,9 @@ async function finalizePending(){
   }
   const doClassify = document.getElementById('classifyToggle') ? document.getElementById('classifyToggle').checked : true;
   const withText = records.filter(r=>r.raw_text), withoutText = records.filter(r=>!r.raw_text);
-  withoutText.forEach(r=>{ if(r.ratings){ const d=deriveSentimentFromRatings(r); r.sentiment=d.sentiment; r.sentiment_score=d.score; } });
+  withoutText.forEach(r=>{ if(r.ratings && !r.sentiment){ const d=deriveSentimentFromRatings(r); r.sentiment=d.sentiment; r.sentiment_score=d.score; } });
 
-  let classifiedOk = 0, classifiedFailed = 0, lastClassifyError = null;
-  if(doClassify && withText.length){
+  if(!skipTextClassify && doClassify && withText.length){
     document.getElementById('progWrap').style.display='block';
     const BATCH=12; let done=0;
     for(let i=0;i<withText.length;i+=BATCH){
@@ -929,7 +1079,23 @@ async function finalizePending(){
       try{
         const results = await classifyBatch(batch);
         const byId = Object.fromEntries(results.map(r=>[r.feedback_id,r]));
-        batch.forEach(rec=>{ const c=byId[rec.feedback_id]; if(c){ rec.sentiment=c.sentiment; rec.sentiment_score=c.sentiment_score; rec.topic_tags=c.topic_tags||[]; rec.urgency_flag=!!c.urgency_flag; classifiedOk++; } else { classifiedFailed++; } });
+        batch.forEach(rec=>{ const c=byId[rec.feedback_id]; if(c){
+          rec.sentiment=c.sentiment; rec.sentiment_score=c.sentiment_score; rec.topic_tags=c.topic_tags||[]; rec.urgency_flag=!!c.urgency_flag;
+          if((!rec.product_service_type || rec.product_service_type==='Unspecified') && c.predicted_service_type && SERVICE_TYPE_TAXONOMY.includes(c.predicted_service_type)){
+            rec.product_service_type = c.predicted_service_type; rec.service_type_inferred = true;
+          }
+          if((!rec.branch || rec.branch==='Unspecified') && c.predicted_branch && BRANCH_TAXONOMY.includes(c.predicted_branch)){
+            rec.branch = c.predicted_branch; rec.branch_inferred = true;
+          }
+          if(c.opportunity_note){ rec.opportunity_note = c.opportunity_note; }
+          if(rec.timestamp_is_default && c.extracted_date && /^\d{4}-\d{2}-\d{2}$/.test(c.extracted_date)){
+            const d = new Date(c.extracted_date+'T00:00:00');
+            if(!isNaN(d)){ rec.timestamp = d.toISOString(); rec.date_inferred = true; }
+          }
+          if(rec.customer_is_default && c.extracted_customer_name){ rec.customer_id = c.extracted_customer_name; rec.customer_inferred = true; }
+          if(rec.staff_is_default && c.extracted_technician_name){ rec.staff_id = c.extracted_technician_name; rec.staff_inferred = true; }
+          classifiedOk++;
+        } else { classifiedFailed++; } });
       }catch(e){ classifiedFailed += batch.length; lastClassifyError = e.message; }
       done+=batch.length;
       document.getElementById('progressFill').style.width = Math.min(done/withText.length*100,100).toFixed(0)+'%';
@@ -944,7 +1110,7 @@ async function finalizePending(){
     const parts = [];
     parts.push(`${records.length - skipped} new row(s) imported`);
     if(skipped) parts.push(`${skipped} duplicate(s) skipped (already in store)`);
-    if(doClassify && withText.length) parts.push(`${classifiedOk}/${withText.length} classified successfully${classifiedFailed?`, ${classifiedFailed} failed`:''}`);
+    if((doClassify && withText.length) || ingestMode==='image') parts.push(`${classifiedOk}/${ingestMode==='image'?selectedImageFiles.length:withText.length} classified successfully${classifiedFailed?`, ${classifiedFailed} failed`:''}`);
     let msg = `${parts.join(' · ')}. Store now has ${merged.length} total records.`;
     if(lastClassifyError) msg += ` Classification error: ${lastClassifyError}`;
     showIngestMsg(msg, classifiedFailed===0 || !doClassify);
