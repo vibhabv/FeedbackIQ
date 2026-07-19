@@ -191,6 +191,7 @@
       <option value="8" selected>Last 8 weeks</option>
       <option value="13">Last 13 weeks</option>
       <option value="26">Last 26 weeks</option>
+      <option value="all">All time</option>
     </select>
     <span style="font-size:12px;color:var(--ink-soft);">or custom:</span>
     <input type="date" id="rangeFrom" style="width:auto;">
@@ -277,10 +278,22 @@ function attachSort(tabKey, panelId, rerenderFn){
   });
 }
 function feedItemHtml(r){
-  const dateStr = new Date(r.timestamp).toLocaleDateString() + (r.date_inferred ? ' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>' : '');
-  const custStr = r.customer_id ? ` · ${esc(r.customer_id)}${r.customer_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>':''}` : '';
-  const staffStr = r.staff_id ? ` · ${esc(r.staff_id)}${r.staff_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-extracted</span>':''}` : '';
-  return `<div class="feed-item"><div class="feed-top"><span>${esc(r.source_channel)} · ${esc(r.branch)}${r.branch_inferred?' <span class="badge warn" style="font-size:9.5px;">AI-guessed</span>':''}${staffStr}${custStr} · ${dateStr}</span><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></div>
+  const dateStr = new Date(r.timestamp).toLocaleDateString();
+  const infoParts = [r.source_channel, r.branch];
+  if(r.staff_id) infoParts.push(r.staff_id);
+  if(r.customer_id) infoParts.push(r.customer_id);
+  infoParts.push(dateStr);
+
+  const inferredLabels = [];
+  if(r.branch_inferred) inferredLabels.push('branch');
+  if(r.staff_inferred) inferredLabels.push('technician');
+  if(r.customer_inferred) inferredLabels.push('customer');
+  if(r.date_inferred) inferredLabels.push('date');
+  if(r.service_type_inferred) inferredLabels.push('service type');
+  const inferredBadge = inferredLabels.length
+    ? `<span class="badge warn" style="font-size:9.5px;" title="AI-inferred from the text: ${inferredLabels.join(', ')}">✨ ${inferredLabels.length} AI-inferred</span>` : '';
+
+  return `<div class="feed-item"><div class="feed-top"><span>${infoParts.map(esc).join(' · ')}</span><span style="display:flex;gap:6px;align-items:center;">${inferredBadge}<span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></span></div>
     <p class="feed-text">${r.raw_text ? esc(r.raw_text) : '<em>(rating-only, no written comment)</em>'}</p>
     <div>${(r.topic_tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
     ${r.opportunity_note ? `<div style="margin-top:6px;padding:7px 10px;background:var(--gold-soft);border-radius:8px;font-size:11.5px;color:var(--ink);"><strong>💡 Opportunity:</strong> ${esc(r.opportunity_note)}</div>` : ''}</div>`;
@@ -327,20 +340,26 @@ function computePeriods(){
   if(state.mode==='custom' && state.customFrom && state.customTo){
     state.rangeEnd = new Date(state.customTo + 'T23:59:59');
     state.rangeStart = new Date(state.customFrom + 'T00:00:00');
+  } else if(state.periodWeeks === 'all'){
+    state.rangeEnd = new Date();
+    const earliest = DATA.reduce((min,r) => { const t=new Date(r.timestamp); return (!min || t<min) ? t : min; }, null);
+    state.rangeStart = earliest || new Date(state.rangeEnd.getTime() - 26*7*24*3600*1000);
   } else {
     state.rangeEnd = new Date();
     state.rangeStart = new Date(state.rangeEnd.getTime() - state.periodWeeks*7*24*3600*1000);
   }
   const durationMs = state.rangeEnd.getTime() - state.rangeStart.getTime();
   state.priorEnd = new Date(state.rangeStart.getTime());
-  state.priorStart = new Date(state.rangeStart.getTime() - durationMs);
+  state.priorStart = state.periodWeeks === 'all' ? new Date(state.priorEnd.getTime()) : new Date(state.rangeStart.getTime() - durationMs);
 
   cur = DATA.filter(r => { const t=new Date(r.timestamp); return t>=state.rangeStart && t<=state.rangeEnd; });
   prior = DATA.filter(r => { const t=new Date(r.timestamp); return t>=state.priorStart && t<state.priorEnd; });
 
   const fmt = d => d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const label = document.getElementById('activeRangeLabel');
-  if(label) label.textContent = `Showing ${fmt(state.rangeStart)} \u2013 ${fmt(state.rangeEnd)} (prior: ${fmt(state.priorStart)} \u2013 ${fmt(state.priorEnd)})`;
+  if(label) label.textContent = state.periodWeeks === 'all' && state.mode!=='custom'
+    ? `Showing all records (${fmt(state.rangeStart)} \u2013 ${fmt(state.rangeEnd)})`
+    : `Showing ${fmt(state.rangeStart)} \u2013 ${fmt(state.rangeEnd)} (prior: ${fmt(state.priorStart)} \u2013 ${fmt(state.priorEnd)})`;
 }
 
 function renderConfidenceNote(){
@@ -611,13 +630,25 @@ function renderOpps(){
     });
   }
 
+  const growthRows = cur.filter(r=>r.opportunity_note).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+
   document.getElementById('panel-opps').innerHTML = `
     <div class="card"><h2>Improvement opportunities</h2><p class="sub">Auto-generated from this period's negative-driving themes. Click a row for the underlying records.</p>
     <table><thead><tr><th>Opportunity</th><th>Owner</th><th>Share / rating</th><th>Concentrated at</th><th>Recommendation</th></tr></thead>
     <tbody id="oppRows"></tbody></table>
     ${oppRows.length ? '' : '<div class="empty">Not enough negative feedback to generate opportunities.</div>'}
     </div>
+    <div class="card"><h2>Growth opportunities</h2><p class="sub">Per-record upsell, cross-sell, referral, and retention suggestions -- generated from every piece of feedback, positive or negative. Click a row for the full record.</p>
+    <table><thead><tr><th>Date</th><th>Branch</th><th>Sentiment</th><th>Suggested next step</th></tr></thead>
+    <tbody id="growthRows"></tbody></table>
+    ${growthRows.length ? '' : '<div class="empty">No opportunity notes in this period yet -- import or classify some feedback with text.</div>'}
+    </div>
   `;
+  const growthTbody = document.getElementById('growthRows');
+  if(growthTbody){
+    growthTbody.innerHTML = growthRows.map(r => `<tr class="clickable"><td>${new Date(r.timestamp).toLocaleDateString()}</td><td>${esc(r.branch)}</td><td><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></td><td>${esc(r.opportunity_note)}</td></tr>`).join('');
+    growthTbody.querySelectorAll('tr').forEach((tr,i)=>tr.addEventListener('click', ()=>openDrilldown('Record detail', [growthRows[i]])));
+  }
   const tbody = document.getElementById('oppRows');
   if(tbody){
     tbody.innerHTML = oppRows.map(r => `<tr class="clickable"><td>${esc(r.issue)}</td><td><span class="opp-owner">${esc(r.owner)}</span></td><td>${esc(r.share)}</td><td>${esc(r.branch)}</td><td>${esc(r.recommendation)}</td></tr>`).join('');
@@ -641,7 +672,7 @@ function renderAll(){
 }
 
 document.getElementById('rangeSelect').addEventListener('change', e=>{
-  state.mode='preset'; state.periodWeeks = parseInt(e.target.value,10);
+  state.mode='preset'; state.periodWeeks = e.target.value === 'all' ? 'all' : parseInt(e.target.value,10);
   document.getElementById('rangeFrom').value=''; document.getElementById('rangeTo').value='';
   renderAll();
 });
