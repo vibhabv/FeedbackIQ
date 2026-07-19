@@ -802,14 +802,22 @@ function fileToBase64(file){
   });
 }
 
+function sanitizeJsonish(text){
+  return text
+    .replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3') // unquoted keys -> quoted
+    .replace(/'([^'\\]*(\\.[^'\\]*)*)'/g, (m, inner) => '"' + inner.replace(/"/g, '\\"') + '"') // single-quoted strings -> double-quoted
+    .replace(/,(\s*[\]}])/g, '$1'); // trailing commas before ] or }
+}
 function parseJsonArraySalvage(text){
-  try{ return JSON.parse(text); }
-  catch(e){
-    const lastBrace = text.lastIndexOf('}');
-    if(lastBrace === -1) throw e;
-    try{ return JSON.parse(text.slice(0, lastBrace+1) + ']'); }
-    catch(e2){ throw e; }
-  }
+  const attempts = [
+    () => JSON.parse(text),
+    () => JSON.parse(sanitizeJsonish(text)),
+    () => { const i=text.lastIndexOf('}'); if(i===-1) throw new Error('no object end found'); return JSON.parse(text.slice(0,i+1)+']'); },
+    () => { const s=sanitizeJsonish(text); const i=s.lastIndexOf('}'); if(i===-1) throw new Error('no object end found'); return JSON.parse(s.slice(0,i+1)+']'); },
+  ];
+  let lastErr;
+  for(const attempt of attempts){ try{ return attempt(); }catch(e){ lastErr = e; } }
+  throw lastErr;
 }
 
 async function extractImageBatch(files){
@@ -838,7 +846,7 @@ For EACH image, extract everything actually visible and return one JSON object w
 - urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint)
 - opportunity_note (max ~12 words: upsell/cross-sell/referral/review-request angle for positive, retention/resolution step for negative; null if nothing to ground it in)
 
-Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences, ordered by image_index.`;
+Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences, ordered by image_index. Use strict JSON syntax only: all property names in double quotes, all string values in double quotes, no trailing commas, no single quotes.`;
   imageBlocks.push({type:'text', text: instructions});
 
   let response;
@@ -1016,7 +1024,7 @@ For each item return:
 - extracted_customer_name (the reviewer/customer's own name if it appears in the text, e.g. a byline or self-identification -- otherwise null. Do NOT use a technician's name for this field.)
 - extracted_technician_name (a technician's name explicitly credited with performing the service, e.g. "Lead tech, Tuan" or "Dealt with Mari" -- otherwise null. Do NOT use the reviewer's own name for this field.)
 
-Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences. Items:
+Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences. Use strict JSON syntax only: all property names in double quotes, all string values in double quotes, no trailing commas, no single quotes. Items:
 ${JSON.stringify(batch.map(r=>({feedback_id:r.feedback_id, raw_text:r.raw_text})))}`;
   let response;
   try{
