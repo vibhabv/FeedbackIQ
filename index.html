@@ -861,7 +861,7 @@ function deriveSentimentFromRatings(r){
 // Default: works inside a Claude artifact (no key needed, sandbox proxies it).
 // Running standalone (e.g. GitHub Pages)? Point this at your own proxy URL instead
 // (see claude_proxy_worker.js) -- never put a real API key directly in this file.
-const CLAUDE_API_ENDPOINT = "https://api.anthropic.com/v1/messages";
+const CLAUDE_API_ENDPOINT = "https://claude-proxy.vibha21u.workers.dev";
 
 async function classifyBatch(batch){
   const prompt = `You are a customer feedback classification engine for a commercial integrated pest management company. Classify each feedback item below.
