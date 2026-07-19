@@ -802,6 +802,16 @@ function fileToBase64(file){
   });
 }
 
+function parseJsonArraySalvage(text){
+  try{ return JSON.parse(text); }
+  catch(e){
+    const lastBrace = text.lastIndexOf('}');
+    if(lastBrace === -1) throw e;
+    try{ return JSON.parse(text.slice(0, lastBrace+1) + ']'); }
+    catch(e2){ throw e; }
+  }
+}
+
 async function extractImageBatch(files){
   const imageBlocks = [];
   for(let i=0;i<files.length;i++){
@@ -826,15 +836,15 @@ For EACH image, extract everything actually visible and return one JSON object w
 - sentiment_score (-1 to 1)
 - topic_tags (array from ${JSON.stringify(TOPIC_TAXONOMY)}, 1-2 most relevant, empty array if no written text)
 - urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint)
-- opportunity_note (one short sentence max ~20 words: upsell/cross-sell/referral/review-request angle for positive, retention/resolution step for negative; null if nothing to ground it in)
+- opportunity_note (max ~12 words: upsell/cross-sell/referral/review-request angle for positive, retention/resolution step for negative; null if nothing to ground it in)
 
-Return ONLY a raw JSON array, no markdown fences, ordered by image_index.`;
+Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences, ordered by image_index.`;
   imageBlocks.push({type:'text', text: instructions});
 
   let response;
   try{
     response = await fetch(CLAUDE_API_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1000, messages:[{role:"user", content: imageBlocks}]})});
+      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:MAX_TOKENS, messages:[{role:"user", content: imageBlocks}]})});
   }catch(networkErr){
     throw new Error("Couldn't reach the Claude API for image extraction — same requirement as text: needs to run inside a Claude artifact or through your own backend proxy.");
   }
@@ -843,7 +853,7 @@ Return ONLY a raw JSON array, no markdown fences, ordered by image_index.`;
   const textBlock = (data.content||[]).find(b=>b.type==='text');
   if(!textBlock) throw new Error("No text content in image extraction response.");
   let clean = textBlock.text.trim().replace(/^```json/,'').replace(/^```/,'').replace(/```$/,'').trim();
-  return JSON.parse(clean);
+  return parseJsonArraySalvage(clean);
 }
 
 function buildRecordFromImageExtraction(obj, cfg, idx){
@@ -977,6 +987,12 @@ function deriveSentimentFromRatings(r){
 // Running standalone (e.g. GitHub Pages)? Point this at your own proxy URL instead
 // (see claude_proxy_worker.js) -- never put a real API key directly in this file.
 const CLAUDE_API_ENDPOINT = "https://claude-proxy.vibha21u.workers.dev";
+// The 1000-token cap only applies inside the Claude artifact sandbox's built-in proxy.
+// A real self-hosted proxy (Cloudflare Worker, etc.) has no such limit -- use it.
+const IS_OWN_PROXY = CLAUDE_API_ENDPOINT !== "https://api.anthropic.com/v1/messages";
+const MAX_TOKENS = IS_OWN_PROXY ? 2000 : 1000;
+const TEXT_BATCH_SIZE = IS_OWN_PROXY ? 8 : 3;
+const IMG_BATCH_SIZE = IS_OWN_PROXY ? 4 : 2;
 
 async function classifyBatch(batch){
   const prompt = `You are a customer feedback classification engine for a commercial integrated pest management company (branches: SF, Antioch, San Jose in the Bay Area). Classify each feedback item below.
@@ -995,17 +1011,17 @@ For each item return:
 - urgency_flag (true only if safety issue, threat to cancel/legal action, or repeated unresolved complaint)
 - predicted_service_type (one exact string from the service type taxonomy ONLY if the text gives a real clue what kind of visit it was, otherwise null; do not guess without evidence)
 - predicted_branch (one exact string from the branch taxonomy ONLY if a city, neighborhood, or address in the text clearly maps to the Bay Area area served by one of these branches -- e.g. "San Francisco"/"Pacifica"/"Daly City" implies SF; "Antioch"/"Concord"/"Pittsburg"/"Brentwood" implies Antioch; "San Jose"/"Santa Clara"/"Sunnyvale"/"Milpitas" implies San Jose -- otherwise null)
-- opportunity_note (one short sentence, max ~20 words, a genuine business next-step suggestion grounded in this specific feedback. For positive feedback: suggest a natural upsell, cross-sell, referral ask, or testimonial/review request tied to what they praised. For negative feedback: suggest a retention or resolution next step. Only return null if the text is truly too generic to ground any specific suggestion in.)
+- opportunity_note (max ~12 words, a genuine business next-step suggestion grounded in this specific feedback. For positive feedback: suggest a natural upsell, cross-sell, referral ask, or review request tied to what they praised. For negative feedback: a retention/resolution next step. null if the text is too generic to ground a suggestion in.)
 - extracted_date (a specific date mentioned in the text, format "YYYY-MM-DD", e.g. "May 5, 2026" -> "2026-05-05" -- ONLY if an actual date appears in the text, otherwise null)
 - extracted_customer_name (the reviewer/customer's own name if it appears in the text, e.g. a byline or self-identification -- otherwise null. Do NOT use a technician's name for this field.)
 - extracted_technician_name (a technician's name explicitly credited with performing the service, e.g. "Lead tech, Tuan" or "Dealt with Mari" -- otherwise null. Do NOT use the reviewer's own name for this field.)
 
-Return ONLY a raw JSON array, no markdown fences. Items:
+Return ONLY a compact raw JSON array with no whitespace, indentation, or line breaks between fields (single line, minified) -- no markdown fences. Items:
 ${JSON.stringify(batch.map(r=>({feedback_id:r.feedback_id, raw_text:r.raw_text})))}`;
   let response;
   try{
     response = await fetch(CLAUDE_API_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:1000, messages:[{role:"user", content:prompt}]})});
+      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens:MAX_TOKENS, messages:[{role:"user", content:prompt}]})});
   }catch(networkErr){
     throw new Error("Couldn't reach the Claude API — this call only works inside a Claude artifact; a standalone/GitHub-hosted copy needs its own backend holding an API key.");
   }
@@ -1014,7 +1030,7 @@ ${JSON.stringify(batch.map(r=>({feedback_id:r.feedback_id, raw_text:r.raw_text})
   const textBlock = (data.content||[]).find(b=>b.type==='text');
   if(!textBlock) throw new Error("No text content in response — this call only works inside a Claude artifact; a standalone copy needs its own backend.");
   let clean = textBlock.text.trim().replace(/^```json/,'').replace(/^```/,'').replace(/```$/,'').trim();
-  return JSON.parse(clean);
+  return parseJsonArraySalvage(clean);
 }
 
 function mergeNoDupes(existing, incoming){
@@ -1040,7 +1056,7 @@ async function finalizePending(){
   if(ingestMode === 'image'){
     if(!selectedImageFiles.length){ showIngestMsg('No images selected.', false); return; }
     document.getElementById('progWrap').style.display = 'block';
-    const IMG_BATCH = 3; let done = 0; const extracted = [];
+    const IMG_BATCH = IMG_BATCH_SIZE; let done = 0; const extracted = [];
     for(let i=0;i<selectedImageFiles.length;i+=IMG_BATCH){
       const batch = selectedImageFiles.slice(i, i+IMG_BATCH);
       try{
@@ -1073,7 +1089,7 @@ async function finalizePending(){
 
   if(!skipTextClassify && doClassify && withText.length){
     document.getElementById('progWrap').style.display='block';
-    const BATCH=5; let done=0;
+    const BATCH=TEXT_BATCH_SIZE; let done=0;
     for(let i=0;i<withText.length;i+=BATCH){
       const batch = withText.slice(i,i+BATCH);
       try{
