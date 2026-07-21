@@ -316,12 +316,9 @@ const TABS = [
   {id:'overview', label:'Overview'},
   {id:'tech', label:'Technician performance'},
   {id:'feedback', label:'Feedback analysis'},
-  {id:'servicetype', label:'Service type'},
-  {id:'branch', label:'Branch comparison'},
-  {id:'risk', label:'At-risk clients'},
-  {id:'channel', label:'Channel gap'},
-  {id:'compliance', label:'Compliance & safety'},
+  {id:'marketing', label:'Marketing'},
   {id:'opps', label:'Opportunities'},
+  {id:'servicetype', label:'Service type & churn risk'},
   {id:'search', label:'Search'},
 ];
 document.getElementById('tabbar').innerHTML = TABS.map((t,i)=>`<button class="tabbtn${i===0?' active':''}" data-tab="${t.id}">${t.label}</button>`).join('');
@@ -370,6 +367,8 @@ function renderConfidenceNote(){
 }
 
 // ============ OVERVIEW ============
+let ASSUMPTIONS = { avgAccountValue: 15000, avgReferralValue: 15000 };
+
 function renderOverview(){
   const NWEEKS=26;
   const weekLabels=[]; const now=new Date();
@@ -394,6 +393,21 @@ function renderOverview(){
   const promoters = npsCur.filter(n=>n>=9).length, detractors = npsCur.filter(n=>n<=6).length, passives = npsCur.length-promoters-detractors;
   const npsScore = npsCur.length? Math.round((promoters-detractors)/npsCur.length*100):0;
 
+  const atRiskClients = getAtRiskClients();
+  const growthOppCount = cur.filter(r=>r.opportunity_note && r.sentiment!=='negative').length;
+  const revenueAtRisk = atRiskClients.length * ASSUMPTIONS.avgAccountValue;
+  const growthValue = growthOppCount * ASSUMPTIONS.avgReferralValue;
+
+  const branches = Array.from(new Set(DATA.map(r=>r.branch)));
+  const branchRows = branches.map(b=>{
+    const list = cur.filter(r=>r.branch===b && r.sentiment_score!=null);
+    const idx = list.length? scoreToIndex(avg(list.map(r=>r.sentiment_score))) : null;
+    return {b, idx, vol:list.length};
+  }).sort((a,b)=>(b.idx??-1)-(a.idx??-1));
+
+  const negTopicsAll = topicCounts(cur,'negative');
+  const topThemes = Object.entries(negTopicsAll).sort((a,b)=>b[1]-a[1]).slice(0,3);
+
   document.getElementById('panel-overview').innerHTML = `
     <div class="pulse-strip">
       <div class="pulse-label">SENTIMENT<br>PULSE</div>
@@ -404,13 +418,57 @@ function renderOverview(){
       <div class="kpi"><div class="lbl">Feedback volume</div><div class="val">${cur.length} <span class="delta ${pct(cur.length,prior.length)>=0?'up':'down'}">${pct(cur.length,prior.length)>=0?'▲':'▼'} ${Math.abs(pct(cur.length,prior.length))}%</span></div></div>
       <div class="kpi"><div class="lbl">Negative sentiment share</div><div class="val">${negShareCur}% <span class="delta ${negShareCur-negSharePrior>=0?'up':'down'}">${negShareCur-negSharePrior>=0?'▲':'▼'} ${Math.abs(negShareCur-negSharePrior)} pts</span></div></div>
       <div class="kpi"><div class="lbl">Urgent items</div><div class="val clickable-row" id="urgKpi">${urgCur} <span class="delta ${urgCur>=urgPrior?'up':'down'}">${urgCur>=urgPrior?'▲':'▼'} ${Math.abs(urgCur-urgPrior)}</span></div></div>
-      <div class="kpi"><div class="lbl">NPS score</div><div class="val">${npsScore} <span class="delta flat">${promoters}P / ${passives}Pa / ${detractors}D</span></div></div>
+      <div class="kpi"><div class="lbl">NPS score</div><div class="val">${npsScore}</div></div>
     </div>
+
+    <div class="card">
+      <h2>Promoters vs. detractors</h2><p class="sub">Based on ${npsCur.length} NPS response(s) this period</p>
+      <div style="display:flex;height:28px;border-radius:8px;overflow:hidden;margin-bottom:8px;">
+        <div style="background:var(--pos);width:${npsCur.length?promoters/npsCur.length*100:0}%;"></div>
+        <div style="background:#D8D5C8;width:${npsCur.length?passives/npsCur.length*100:0}%;"></div>
+        <div style="background:var(--neg);width:${npsCur.length?detractors/npsCur.length*100:0}%;"></div>
+      </div>
+      <div style="display:flex;gap:18px;font-size:12px;color:var(--ink-soft);">
+        <span><span style="color:var(--pos);">●</span> ${promoters} promoters</span>
+        <span><span style="color:#B0AC98;">●</span> ${passives} passives</span>
+        <span><span style="color:var(--neg);">●</span> ${detractors} detractors</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Opportunities, quantified</h2><p class="sub">Estimates only, based on assumptions you set — not real contract data</p>
+      <div class="ingest-row" style="margin-bottom:12px;">
+        <label style="font-size:12px;color:var(--ink-soft);">Avg. account value/yr $<input type="number" id="assumeAccountValue" value="${ASSUMPTIONS.avgAccountValue}" style="width:90px;margin-left:4px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;"></label>
+        <label style="font-size:12px;color:var(--ink-soft);">Avg. referral value $<input type="number" id="assumeReferralValue" value="${ASSUMPTIONS.avgReferralValue}" style="width:90px;margin-left:4px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;"></label>
+        <button class="ibtn primary" id="applyAssumptionsBtn" type="button" style="padding:6px 12px;">Apply</button>
+      </div>
+      <div class="kpis">
+        <div class="kpi"><div class="lbl">Est. revenue at risk (churn)</div><div class="val" style="color:var(--neg);">$${revenueAtRisk.toLocaleString()}</div><p class="sub" style="margin:4px 0 0;">${atRiskClients.length} at-risk client(s) × assumed value</p></div>
+        <div class="kpi"><div class="lbl">Est. growth opportunity</div><div class="val" style="color:var(--pos);">$${growthValue.toLocaleString()}</div><p class="sub" style="margin:4px 0 0;">${growthOppCount} upsell/referral note(s) this period</p></div>
+      </div>
+    </div>
+
     <div class="grid halves">
       <div class="card"><h2>NPS trend</h2><p class="sub">Weekly NPS (%promoters - %detractors)</p><div style="height:140px;position:relative;"><canvas id="npsChart"></canvas></div></div>
-      <div class="card"><h2>What's driving alerts</h2><p class="sub">Click an alert to see the underlying records</p><div id="ovAlerts"></div></div>
+      <div class="card"><h2>Branch comparison</h2><p class="sub">Sentiment index this period</p>
+        <table><thead><tr><th>Branch</th><th>Sentiment</th><th>Volume</th></tr></thead><tbody>
+        ${branchRows.map(r=>`<tr><td>${esc(r.b)}</td><td><span class="badge ${r.idx>=70?'good':r.idx>=50?'warn':'bad'}">${r.idx??'—'}</span></td><td>${r.vol}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">No data.</td></tr>'}
+        </tbody></table>
+      </div>
+    </div>
+
+    <div class="grid halves">
+      <div class="card"><h2>Top complaint themes</h2><p class="sub">Ranked by volume this period, always shown. Click a theme for its records.</p>
+        <div id="topThemesList">${topThemes.length ? topThemes.map(([t,c],i)=>`<div class="clickable-row" data-theme-i="${i}" style="padding:6px 0;font-size:13px;">${esc(t)} <span style="color:var(--ink-soft);">— ${c} mention(s)</span></div>`).join('') : '<div class="empty">Nothing standing out.</div>'}</div>
+      </div>
+      <div class="card"><h2>What's driving alerts</h2><p class="sub">Only appears when something crosses a threshold — a spike, not just a ranking</p><div id="ovAlerts"></div></div>
     </div>
   `;
+  document.getElementById('topThemesList').querySelectorAll('[data-theme-i]').forEach(el=>{
+    const i = parseInt(el.dataset.themeI,10);
+    const [themeName] = topThemes[i];
+    el.addEventListener('click', ()=>openDrilldown(`${themeName} — negative records`, cur.filter(r=>r.sentiment==='negative'&&(r.topic_tags||[]).includes(themeName))));
+  });
 
   new Chart(document.getElementById('pulseChart'), { type:'line', data:{labels:weekLabels, datasets:[{data:filledSent, borderColor:'#7FD9BE', borderWidth:2.5, pointRadius:0, tension:.35, fill:true,
     backgroundColor:(ctx)=>{const g=ctx.chart.ctx.createLinearGradient(0,0,0,40); g.addColorStop(0,'rgba(127,217,190,.35)'); g.addColorStop(1,'rgba(127,217,190,0)'); return g;}}]},
@@ -422,11 +480,23 @@ function renderOverview(){
   const alerts=[];
   if(negShareCur-negSharePrior>=3) alerts.push({crit:false,title:'Negative sentiment share rising',text:`Up ${negShareCur-negSharePrior} pts vs prior period.`, records: cur.filter(r=>r.sentiment==='negative')});
   if(urgCur>0) alerts.push({crit:true,title:`${urgCur} urgent item(s) this period`,text:'Click to view.', records: cur.filter(r=>r.urgency_flag)});
+  if(atRiskClients.length>0) alerts.push({crit:true,title:`${atRiskClients.length} client(s) may churn without action`,text:`Roughly $${revenueAtRisk.toLocaleString()} in estimated annual value.`, records: cur.filter(r=>atRiskClients.some(c=>c.client===r.customer_id))});
   if(detractors>promoters) alerts.push({crit:false,title:'More detractors than promoters',text:`${detractors} detractors vs ${promoters} promoters.`, records: cur.filter(r=>r.nps!=null && r.nps<=6)});
   const alertsEl = document.getElementById('ovAlerts');
   alertsEl.innerHTML = alerts.length? alerts.map((a,i)=>`<div class="alert ${a.crit?'crit':''}" data-i="${i}"><div><h3>${a.title}</h3><p>${a.text}</p></div></div>`).join('') : '<div class="empty">No threshold alerts this period.</div>';
   alertsEl.querySelectorAll('.alert').forEach((el,i)=>el.addEventListener('click',()=>openDrilldown(alerts[i].title, alerts[i].records)));
   document.getElementById('urgKpi').addEventListener('click', ()=>openDrilldown('Urgent items this period', cur.filter(r=>r.urgency_flag)));
+  document.getElementById('applyAssumptionsBtn').addEventListener('click', ()=>{
+    ASSUMPTIONS.avgAccountValue = parseFloat(document.getElementById('assumeAccountValue').value)||0;
+    ASSUMPTIONS.avgReferralValue = parseFloat(document.getElementById('assumeReferralValue').value)||0;
+    renderOverview();
+  });
+}
+
+function getAtRiskClients(){
+  const byClient = {};
+  cur.filter(r=>r.sentiment==='negative').forEach(r=>{ (byClient[r.customer_id]=byClient[r.customer_id]||[]).push(r); });
+  return Object.entries(byClient).filter(([client,list])=>client && list.length>=2).map(([client,list])=>({client, count:list.length, list}));
 }
 
 // ============ TECHNICIAN PERFORMANCE ============
@@ -470,6 +540,7 @@ function renderTech(){
 }
 
 // ============ FEEDBACK ANALYSIS ============
+let feedbackFilter = null;
 function renderFeedback(){
   const pos = topicCounts(cur,'positive'), neg = topicCounts(cur,'negative');
   const allTopics = Array.from(new Set([...Object.keys(pos), ...Object.keys(neg)]));
@@ -479,12 +550,24 @@ function renderFeedback(){
   const needsWork = rows.filter(r=>r.neg>=r.pos).sort((a,b)=>b.neg-a.neg).slice(0,4);
 
   document.getElementById('panel-feedback').innerHTML = `
+    <div class="card">
+      <h2>Filter by theme</h2><p class="sub">Includes Compliance &amp; documentation and Safety/eco-friendly practice perception as regular filters</p>
+      <div id="feedbackChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
     <div class="grid halves">
       <div class="card"><h2>What's working</h2><p class="sub">Click a topic to see the positive records</p><div id="workingList"></div></div>
       <div class="card"><h2>Needs work</h2><p class="sub">Click a topic to see the negative records</p><div id="needsList"></div></div>
     </div>
-    <div class="card"><h2>Recent feedback with commentary</h2><p class="sub">Most recent records that include written text</p><div id="fbFeed"></div></div>
+    <div class="card"><h2>Recent feedback with commentary</h2><p class="sub">${feedbackFilter ? `Filtered to "${esc(feedbackFilter)}"` : 'Most recent records that include written text'}</p><div id="fbFeed"></div></div>
   `;
+  const chipsEl = document.getElementById('feedbackChips');
+  const allChipTopics = ['All', ...TOPIC_TAXONOMY];
+  chipsEl.innerHTML = allChipTopics.map(t => `<button class="ibtn${(t==='All'&&!feedbackFilter)||t===feedbackFilter?' primary':''}" data-chip="${esc(t)}" type="button" style="padding:6px 12px;font-size:12px;">${esc(t)}</button>`).join('');
+  chipsEl.querySelectorAll('[data-chip]').forEach(btn => btn.addEventListener('click', () => {
+    feedbackFilter = btn.dataset.chip === 'All' ? null : btn.dataset.chip;
+    renderFeedback();
+  }));
+
   const workingEl = document.getElementById('workingList');
   workingEl.innerHTML = working.map(r=>`<div class="clickable-row" style="margin-bottom:10px;" data-t="${esc(r.t)}"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;"><span>${esc(r.t)}</span><span>${r.pos} positive</span></div><div class="bar-track"><div class="bar-fill" style="width:${(r.pos/maxVal*100).toFixed(0)}%"></div></div></div>`).join('') || '<div class="empty">Not enough data.</div>';
   workingEl.querySelectorAll('[data-t]').forEach(el=>el.addEventListener('click',()=>openDrilldown(`${el.dataset.t} — positive`, cur.filter(r=>r.sentiment==='positive'&&(r.topic_tags||[]).includes(el.dataset.t)))));
@@ -493,8 +576,10 @@ function renderFeedback(){
   needsEl.innerHTML = needsWork.map(r=>`<div class="clickable-row" style="margin-bottom:10px;" data-t="${esc(r.t)}"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;"><span>${esc(r.t)}</span><span>${r.neg} negative</span></div><div class="bar-track"><div class="bar-fill neg" style="width:${(r.neg/maxVal*100).toFixed(0)}%"></div></div></div>`).join('') || '<div class="empty">Not enough data.</div>';
   needsEl.querySelectorAll('[data-t]').forEach(el=>el.addEventListener('click',()=>openDrilldown(`${el.dataset.t} — negative`, cur.filter(r=>r.sentiment==='negative'&&(r.topic_tags||[]).includes(el.dataset.t)))));
 
-  const recent = [...DATA].filter(r=>r.raw_text).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)).slice(0,6);
-  document.getElementById('fbFeed').innerHTML = recent.map(feedItemHtml).join('') || '<div class="empty">No commentary yet.</div>';
+  let recent = [...DATA].filter(r=>r.raw_text);
+  if(feedbackFilter) recent = recent.filter(r=>(r.topic_tags||[]).includes(feedbackFilter));
+  recent = recent.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)).slice(0,8);
+  document.getElementById('fbFeed').innerHTML = recent.map(feedItemHtml).join('') || '<div class="empty">No commentary matches this filter.</div>';
 }
 
 // ============ SERVICE TYPE ============
@@ -520,88 +605,162 @@ function renderServiceType(){
   const tbody = document.getElementById('svcRows');
   tbody.innerHTML = rows.map(r=>`<tr class="clickable"><td>${esc(r.t)}${r.inferredCount?` <span class="badge warn" style="margin-left:4px;">${r.inferredCount} AI-guessed</span>`:''}</td><td>${r.vol}</td><td><span class="badge ${r.negShare>=40?'bad':r.negShare>=20?'warn':'good'}">${r.negShare}%</span></td><td>${esc(r.topNeg)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Not enough data.</td></tr>';
   tbody.querySelectorAll('tr').forEach((tr,i)=>{ if(!rows[i]) return; tr.addEventListener('click', ()=>openDrilldown(rows[i].t, rows[i].list)); });
-}
 
-// ============ BRANCH COMPARISON ============
-function renderBranch(){
-  const branches = Array.from(new Set(DATA.map(r=>r.branch)));
-  const allRows = branches.map(b=>{
-    const list = cur.filter(r=>r.branch===b && r.sentiment_score!=null);
-    const idx = list.length? scoreToIndex(avg(list.map(r=>r.sentiment_score))) : null;
-    const urg = list.filter(r=>r.urgency_flag).length;
-    const negTopics = topicCounts(list,'negative');
-    const topNeg = Object.entries(negTopics).sort((a,b)=>b[1]-a[1])[0];
-    return {b, idx, vol:list.length, urg, topNeg: topNeg? topNeg[0]:'—', list};
-  });
-  const rows = sortRows(allRows, sortState.branch.key, sortState.branch.dir);
-  document.getElementById('panel-branch').innerHTML = `
-    <div class="card"><h2>Branch comparison</h2><p class="sub">Click a header to sort, a row for its records</p>
-    <table><thead><tr>${thSort('branch','b','Branch')}${thSort('branch','idx','Sentiment index')}${thSort('branch','vol','Volume')}${thSort('branch','urg','Urgent')}${thSort('branch','topNeg','Top negative topic')}</tr></thead>
-    <tbody id="branchRows"></tbody></table></div>
-  `;
-  attachSort('branch', 'panel-branch', renderBranch);
-  const tbody = document.getElementById('branchRows');
-  tbody.innerHTML = rows.map(r=>`<tr class="clickable"><td>${esc(r.b)}</td><td><span class="badge ${r.idx>=70?'good':r.idx>=50?'warn':'bad'}">${r.idx??'—'}</span></td><td>${r.vol}</td><td>${r.urg}</td><td>${esc(r.topNeg)}</td></tr>`).join('');
-  tbody.querySelectorAll('tr').forEach((tr,i)=>tr.addEventListener('click',()=>openDrilldown(`${rows[i].b} branch — records`, rows[i].list)));
-}
-
-// ============ AT-RISK CLIENTS ============
-function renderRisk(){
-  const byClient = {};
-  cur.filter(r=>r.sentiment==='negative').forEach(r=>{ (byClient[r.customer_id]=byClient[r.customer_id]||[]).push(r); });
-  const risky = Object.entries(byClient).filter(([,list])=>list.length>=2).map(([client,list])=>{
+  const risky = getAtRiskClients().map(({client,count,list})=>{
     const latest = list.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp))[0];
     const techs = Array.from(new Set(list.map(r=>r.staff_id).filter(Boolean)));
-    return {client, count:list.length, branch:latest.branch, snippet: latest.raw_text || '(rating-only, no comment)', techs, list};
+    return {client, count, branch:latest.branch, snippet: latest.raw_text || '(rating-only, no comment)', techs, list};
   }).sort((a,b)=>b.count-a.count);
-
-  document.getElementById('panel-risk').innerHTML = `
-    <div class="card"><h2>At-risk clients</h2><p class="sub">2+ negative records this period — a churn signal for recurring accounts. Click for full history.</p>
-    <div id="riskList"></div></div>
-  `;
-  const el = document.getElementById('riskList');
-  el.innerHTML = risky.length ? risky.map((r,i)=>`
+  const riskCard = document.createElement('div');
+  riskCard.className = 'card';
+  riskCard.innerHTML = `<h2>At-risk clients</h2><p class="sub">2+ negative records this period — a churn signal for recurring accounts. Est. $${(risky.length*ASSUMPTIONS.avgAccountValue).toLocaleString()} in assumed annual value. Click for full history.</p><div id="riskList"></div>`;
+  document.getElementById('panel-servicetype').appendChild(riskCard);
+  const riskEl = riskCard.querySelector('#riskList');
+  riskEl.innerHTML = risky.length ? risky.map((r,i)=>`
     <div class="feed-item clickable" data-i="${i}"><div class="feed-top"><span>${esc(r.client)} · ${esc(r.branch)}${r.techs.length?` · serviced by ${r.techs.map(esc).join(', ')}`:''}</span><span class="badge bad">${r.count} negative</span></div>
     <p class="feed-text">Latest: "${esc(r.snippet)}"</p></div>
   `).join('') : '<div class="empty">No clients currently flagged.</div>';
-  el.querySelectorAll('[data-i]').forEach(node=>{
+  riskEl.querySelectorAll('[data-i]').forEach(node=>{
     const i = parseInt(node.dataset.i,10);
     node.addEventListener('click', ()=>openDrilldown(`${risky[i].client} — full history`, risky[i].list));
   });
 }
 
-// ============ CHANNEL GAP ============
-function renderChannel(){
+// ============ MARKETING ============
+function renderMarketing(){
   const channels = Array.from(new Set(DATA.map(r=>r.source_channel)));
-  const rows = channels.map(c=>{
+  const channelRows = channels.map(c=>{
     const list = cur.filter(r=>r.source_channel===c && r.sentiment_score!=null);
     return {c, idx: list.length? scoreToIndex(avg(list.map(r=>r.sentiment_score))) : null, vol:list.length, list};
   }).filter(r=>r.idx!=null).sort((a,b)=>b.idx-a.idx);
 
-  document.getElementById('panel-channel').innerHTML = `<div class="card"><h2>Sentiment index by channel</h2><p class="sub">Click a bar for that channel's records. Public review channels often run harsher than direct surveys.</p><div style="height:220px;position:relative;"><canvas id="channelChart"></canvas></div></div>`;
-  const chart = new Chart(document.getElementById('channelChart'), { type:'bar',
-    data:{labels: rows.map(r=>r.c), datasets:[{data: rows.map(r=>r.idx), backgroundColor: rows.map(r=>CHANNEL_COLORS[r.c]||'#999'), borderRadius:6}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-      onClick:(evt,elements)=>{ if(elements.length){ const i=elements[0].index; openDrilldown(`${rows[i].c} — records`, rows[i].list); } },
-      scales:{y:{min:0,max:100,ticks:{font:{family:'IBM Plex Mono',size:10.5}}},x:{ticks:{font:{family:'IBM Plex Mono',size:10.5}}}}}});
-}
+  const PUBLIC_CHANNELS = ['Yelp','Google'];
+  const thankQueue = cur.filter(r=>r.raw_text && r.sentiment==='positive' && r.staff_id && !PUBLIC_CHANNELS.includes(r.source_channel)).slice(0,8);
+  const publicReviews = cur.filter(r=>r.raw_text && PUBLIC_CHANNELS.includes(r.source_channel)).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)).slice(0,10);
 
-// ============ COMPLIANCE & SAFETY ============
-function renderCompliance(){
-  const topics = ["Compliance & documentation","Safety/eco-friendly practice perception"];
-  document.getElementById('panel-compliance').innerHTML = `<div class="grid halves">${topics.map(t=>`<div class="card" id="comp-${t.replace(/[^a-z]/gi,'')}"></div>`).join('')}</div>`;
-  topics.forEach(topic=>{
-    const list = cur.filter(r=>(r.topic_tags||[]).includes(topic));
-    const posN = list.filter(r=>r.sentiment==='positive').length, negN = list.filter(r=>r.sentiment==='negative').length;
-    const recent = list.filter(r=>r.raw_text).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)).slice(0,3);
-    document.getElementById(`comp-${topic.replace(/[^a-z]/gi,'')}`).innerHTML = `
-      <h2>${esc(topic)}</h2><p class="sub">${list.length} mentions this period · ${posN} positive / ${negN} negative</p>
-      ${recent.map(feedItemHtml).join('') || '<div class="empty">No commentary this period.</div>'}
-    `;
+  document.getElementById('panel-marketing').innerHTML = `
+    <div class="card"><h2>Thank &amp; nudge</h2><p class="sub">Positive private feedback naming a technician — thank the customer and ask for a public review</p><div id="thankQueue"></div></div>
+    <div class="card"><h2>Public review responses</h2><p class="sub">Yelp/Google reviews — draft a response to protect or build the brand</p><div id="publicQueue"></div></div>
+    <div class="card"><h2>Channel gap</h2><p class="sub">Sentiment index by channel — is tone harsher on public review sites?</p><div style="height:220px;position:relative;"><canvas id="channelChart"></canvas></div></div>
+  `;
+
+  const draftBoxStyle = 'background:var(--bg);padding:8px 10px;border-radius:8px;font-size:12.5px;margin-top:6px;line-height:1.5;';
+  const thankEl = document.getElementById('thankQueue');
+  thankEl.innerHTML = thankQueue.length ? thankQueue.map((r,i)=>`
+    <div class="feed-item" id="thank-${i}">
+      <div class="feed-top"><span>${esc(r.source_channel)} · ${esc(r.branch)} · ${esc(r.staff_id)}${r.customer_id?` · ${esc(r.customer_id)}`:''}</span><span class="badge good">positive</span></div>
+      <p class="feed-text">${esc(r.raw_text)}</p>
+      <div class="draft-template" style="${draftBoxStyle}">${esc(templateThankNudge(r))}</div>
+      <div class="controls" style="margin-top:6px;"><button class="ibtn" data-draft-btn="${i}" type="button">✨ Personalize with AI</button><button class="ibtn" data-copy-btn="${i}" type="button">Copy</button></div>
+    </div>
+  `).join('') : '<div class="empty">No positive feedback naming a technician this period.</div>';
+
+  const pubEl = document.getElementById('publicQueue');
+  pubEl.innerHTML = publicReviews.length ? publicReviews.map((r,i)=>`
+    <div class="feed-item" id="pub-${i}">
+      <div class="feed-top"><span>${esc(r.source_channel)} · ${esc(r.branch)} · ${new Date(r.timestamp).toLocaleDateString()}</span><span class="badge ${r.sentiment==='negative'?'bad':'good'}">${r.sentiment||'—'}</span></div>
+      <p class="feed-text">${esc(r.raw_text)}</p>
+      <div class="draft-template" style="${draftBoxStyle}">${esc(templatePublicResponse(r))}</div>
+      <div class="controls" style="margin-top:6px;"><button class="ibtn" data-pubdraft-btn="${i}" data-mode="${r.sentiment==='negative'?'public_negative':'public_positive'}" type="button">✨ Personalize with AI</button><button class="ibtn" data-pubcopy-btn="${i}" type="button">Copy</button></div>
+    </div>
+  `).join('') : '<div class="empty">No public reviews this period.</div>';
+
+  thankEl.querySelectorAll('[data-draft-btn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.draftBtn,10);
+      personalizeDraft(thankQueue[i], 'thank_nudge', document.querySelector(`#thank-${i} .draft-template`), btn);
+    });
   });
+  thankEl.querySelectorAll('[data-copy-btn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.copyBtn,10);
+      const text = document.querySelector(`#thank-${i} .draft-template`).textContent;
+      navigator.clipboard?.writeText(text).catch(()=>{});
+      btn.textContent = 'Copied!'; setTimeout(()=>btn.textContent='Copy', 1500);
+    });
+  });
+  pubEl.querySelectorAll('[data-pubdraft-btn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.pubdraftBtn,10);
+      personalizeDraft(publicReviews[i], btn.dataset.mode, document.querySelector(`#pub-${i} .draft-template`), btn);
+    });
+  });
+  pubEl.querySelectorAll('[data-pubcopy-btn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.pubcopyBtn,10);
+      const text = document.querySelector(`#pub-${i} .draft-template`).textContent;
+      navigator.clipboard?.writeText(text).catch(()=>{});
+      btn.textContent = 'Copied!'; setTimeout(()=>btn.textContent='Copy', 1500);
+    });
+  });
+
+  if(channelRows.length){
+    new Chart(document.getElementById('channelChart'), { type:'bar',
+      data:{labels: channelRows.map(r=>r.c), datasets:[{data: channelRows.map(r=>r.idx), backgroundColor: channelRows.map(r=>CHANNEL_COLORS[r.c]||'#999'), borderRadius:6}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        onClick:(evt,elements)=>{ if(elements.length){ const idx=elements[0].index; openDrilldown(`${channelRows[idx].c} — records`, channelRows[idx].list); } },
+        scales:{y:{min:0,max:100,ticks:{font:{family:'IBM Plex Mono',size:10.5}}},x:{ticks:{font:{family:'IBM Plex Mono',size:10.5}}}}}});
+  }
 }
 
-// ============ OPPORTUNITIES ============
+function templateThankNudge(r){
+  const name = r.customer_id || 'there';
+  const tech = r.staff_id || 'our technician';
+  return `Hi ${name}, thank you so much for your kind words about ${tech}! We're thrilled the service went so well. If you have a moment, we'd love it if you could share your experience publicly — it really helps other customers find us: [Google review link] [Yelp review link]`;
+}
+function templatePublicResponse(r){
+  if(r.sentiment==='negative'){
+    return `We're sorry to hear about your experience${r.staff_id?` with ${r.staff_id}`:''}. This isn't the standard we hold ourselves to, and we'd like to make it right. Please reach out to us directly so we can resolve this.`;
+  }
+  return `Thank you so much for this review! We're thrilled${r.staff_id?` ${r.staff_id}`:' our team'} could help. We look forward to serving you again!`;
+}
+
+async function personalizeDraft(record, mode, targetEl, btn){
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Drafting…';
+  try{
+    const text = await draftResponseForRecord(record, mode);
+    targetEl.textContent = text;
+  }catch(e){
+    targetEl.insertAdjacentHTML('afterend', `<div class="ingest-msg err" style="margin-top:6px;">Draft failed: ${esc(e.message)}</div>`);
+  }
+  btn.disabled = false; btn.textContent = orig;
+}
+
+async function draftResponseForRecord(record, mode){
+  let instruction;
+  if(mode==='thank_nudge'){
+    instruction = `Write a short, warm thank-you message (max 60 words) to a customer who left positive feedback about a technician at a commercial pest control company. Naturally invite them to leave a public review on Google or Yelp. Customer name: ${record.customer_id||'the customer'}. Technician: ${record.staff_id||'the technician'}. Their feedback: "${record.raw_text}". Return ONLY the message text, no preamble, no surrounding quotes.`;
+  } else if(mode==='public_negative'){
+    instruction = `You are a marketing director for a commercial pest control company, writing a public reply to a negative online review. Be professional, empathetic, take ownership without being defensive, and invite them to resolve it privately. Max 60 words. The review: "${record.raw_text}". Return ONLY the reply text, no preamble, no surrounding quotes.`;
+  } else {
+    instruction = `You are a marketing director for a commercial pest control company, writing a public reply to a positive online review. Be warm and genuine, reference something specific from their review, avoid generic phrases. Max 50 words. The review: "${record.raw_text}". Return ONLY the reply text, no preamble, no surrounding quotes.`;
+  }
+  let response;
+  try{
+    response = await fetch(CLAUDE_API_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({model:"claude-sonnet-4-6", max_tokens: Math.min(MAX_TOKENS, 300), messages:[{role:"user", content: instruction}]})});
+  }catch(networkErr){
+    throw new Error("Couldn't reach the Claude API for drafting.");
+  }
+  const data = await response.json();
+  if(data.error){ throw new Error("API error: " + (data.error.message || data.error.type)); }
+  const textBlock = (data.content||[]).find(b=>b.type==='text');
+  if(!textBlock) throw new Error("No text content in response.");
+  return textBlock.text.trim();
+}
+
+function fallbackOpportunityNote(r){
+  if(!r.raw_text) return null;
+  const topic = (r.topic_tags||[])[0];
+  if(r.sentiment==='positive'){
+    return topic ? `Ask for a review or referral — praised for ${topic.toLowerCase()}` : 'Ask for a review or referral';
+  }
+  if(r.sentiment==='negative'){
+    return topic ? `Follow up to resolve — flagged for ${topic.toLowerCase()}` : 'Follow up to resolve this concern';
+  }
+  return null;
+}
+
 function renderOpps(){
   const neg = topicCounts(cur, 'negative');
   const totalNeg = cur.filter(r=>r.sentiment==='negative').length;
@@ -630,7 +789,9 @@ function renderOpps(){
     });
   }
 
-  const growthRows = cur.filter(r=>r.opportunity_note).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const growthRows = cur.filter(r=>r.raw_text && (r.opportunity_note || fallbackOpportunityNote(r)))
+    .map(r=>({...r, _note: r.opportunity_note || fallbackOpportunityNote(r), _fallback: !r.opportunity_note}))
+    .sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
 
   document.getElementById('panel-opps').innerHTML = `
     <div class="card"><h2>Improvement opportunities</h2><p class="sub">Auto-generated from this period's negative-driving themes. Click a row for the underlying records.</p>
@@ -638,15 +799,15 @@ function renderOpps(){
     <tbody id="oppRows"></tbody></table>
     ${oppRows.length ? '' : '<div class="empty">Not enough negative feedback to generate opportunities.</div>'}
     </div>
-    <div class="card"><h2>Growth opportunities</h2><p class="sub">Per-record upsell, cross-sell, referral, and retention suggestions -- generated from every piece of feedback, positive or negative. Click a row for the full record.</p>
-    <table><thead><tr><th>Date</th><th>Branch</th><th>Sentiment</th><th>Suggested next step</th></tr></thead>
+    <div class="card"><h2>Growth opportunities</h2><p class="sub">Per-record upsell, cross-sell, referral, and retention suggestions. "Generic" rows are rule-based fallbacks (this record predates AI-generated notes) — click a row for the full record.</p>
+    <table><thead><tr><th>Date</th><th>Branch</th><th>Sentiment</th><th>Example</th><th>Suggested next step</th></tr></thead>
     <tbody id="growthRows"></tbody></table>
-    ${growthRows.length ? '' : '<div class="empty">No opportunity notes in this period yet -- import or classify some feedback with text.</div>'}
+    ${growthRows.length ? '' : '<div class="empty">No feedback with text in this period yet.</div>'}
     </div>
   `;
   const growthTbody = document.getElementById('growthRows');
   if(growthTbody){
-    growthTbody.innerHTML = growthRows.map(r => `<tr class="clickable"><td>${new Date(r.timestamp).toLocaleDateString()}</td><td>${esc(r.branch)}</td><td><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></td><td>${esc(r.opportunity_note)}</td></tr>`).join('');
+    growthTbody.innerHTML = growthRows.map(r => `<tr class="clickable"><td>${new Date(r.timestamp).toLocaleDateString()}</td><td>${esc(r.branch)}</td><td><span class="badge ${r.sentiment==='negative'?'bad':r.sentiment==='neutral'?'warn':'good'}">${r.sentiment||'—'}</span></td><td style="max-width:220px;">"${esc((r.raw_text||'').slice(0,90))}${r.raw_text&&r.raw_text.length>90?'…':''}"</td><td>${esc(r._note)}${r._fallback?' <span class="badge warn" style="font-size:9.5px;">generic</span>':''}</td></tr>`).join('');
     growthTbody.querySelectorAll('tr').forEach((tr,i)=>tr.addEventListener('click', ()=>openDrilldown('Record detail', [growthRows[i]])));
   }
   const tbody = document.getElementById('oppRows');
@@ -668,7 +829,7 @@ function renderSearch(){
 function renderAll(){
   computePeriods();
   renderConfidenceNote();
-  renderOverview(); renderTech(); renderFeedback(); renderServiceType(); renderBranch(); renderRisk(); renderChannel(); renderCompliance(); renderOpps(); renderSearch();
+  renderOverview(); renderTech(); renderFeedback(); renderMarketing(); renderOpps(); renderServiceType(); renderSearch();
 }
 
 document.getElementById('rangeSelect').addEventListener('change', e=>{
